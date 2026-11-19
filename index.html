@@ -393,22 +393,32 @@ var Core = (function(){
 
   /* 書き取り欄（1200×900、300角のマス）を1マス1文字として分ける。
      各線は外接矩形の中心があるマスに属する。読む順は左上から右へ、次の行へ。 */
-  var PAD_W=1200, PAD_H=900, CELL=300;
-  function segmentCells(strokes){
-    var cols=PAD_W/CELL, rows=PAD_H/CELL, map={};
+  var PAD_W=1200, PAD_H=800, CELL=400;   /* 3×2マス */
+  function segmentCells(strokes, geo){
+    var W=(geo&&geo.w)||PAD_W, H=(geo&&geo.h)||PAD_H, CELL_=(geo&&geo.cell)||CELL;
+    var cols=W/CELL_, rows=H/CELL_, map={};
     (strokes||[]).forEach(function(s){
       if(!s||!s.length) return;
       var x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
       s.forEach(function(p){ if(p[0]<x0)x0=p[0]; if(p[0]>x1)x1=p[0]; if(p[1]<y0)y0=p[1]; if(p[1]>y1)y1=p[1]; });
-      var c=Math.min(cols-1,Math.max(0,Math.floor((x0+x1)/2/CELL))), r=Math.min(rows-1,Math.max(0,Math.floor((y0+y1)/2/CELL)));
+      var c=Math.min(cols-1,Math.max(0,Math.floor((x0+x1)/2/CELL_))), r=Math.min(rows-1,Math.max(0,Math.floor((y0+y1)/2/CELL_)));
       var k=r*cols+c; (map[k]=map[k]||[]).push(s);
     });
     return Object.keys(map).map(Number).sort(function(a,b){return a-b;}).map(function(k){
-      var ox=(k%cols)*CELL, oy=Math.floor(k/cols)*CELL, f=256/CELL;
+      var ox=(k%cols)*CELL_, oy=Math.floor(k/cols)*CELL_, f=256/CELL_;
       var cs=map[k].map(function(s){ return s.map(function(p){ return [ (p[0]-ox)*f, (p[1]-oy)*f ]; }); });
       var x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; cs.forEach(function(s){ s.forEach(function(p){ x0=Math.min(x0,p[0]);x1=Math.max(x1,p[0]);y0=Math.min(y0,p[1]);y1=Math.max(y1,p[1]); }); });
       return {cell:k, strokes:cs, tiny:(x1-x0)<10 && (y1-y0)<10};
     }).filter(function(c){ return !c.tiny; });  /* 触れただけの点は文字として扱わない */
+  }
+  /* 判定の厳しさ：各マスの候補（似ている順）の何位以内に正解の字があれば○にするか。
+     1=きびしい（1位のみ） 2=ふつう（2位以内） 3=やさしい（3位以内）。字数がちがえば常に△。 */
+  var STRICT_K={1:1, 2:2, 3:3};
+  function judgeCandidates(cands, answer, level){
+    var chars=Array.from(normalizeForCompare(answer)), k=STRICT_K[level]||1;
+    if(!cands || cands.length!==chars.length) return {result:'ng', ranks:null};
+    var ranks=chars.map(function(c,i){ return (cands[i]||[]).indexOf(c); });
+    return {result: ranks.every(function(x){ return x>=0 && x<k; }) ? 'ok' : 'ng', ranks:ranks};
   }
   function judgeRecognized(recognized, answer){
     return normalizeForCompare(recognized)===normalizeForCompare(answer) ? 'ok' : 'ng';
@@ -418,7 +428,7 @@ var Core = (function(){
 
   return {HEADER:HEADER, decode:decode, parseCSV:parseCSV, analyze:analyze, shuffle:shuffle, sortBySet:sortBySet,
     isComplete:isComplete, isCorrect:isCorrect, reviewKey:reviewKey, applyReview:applyReview,
-    segmentCells:segmentCells, reviseReview:reviseReview, judgeRecognized:judgeRecognized,
+    segmentCells:segmentCells, judgeCandidates:judgeCandidates, reviseReview:reviseReview, judgeRecognized:judgeRecognized,
     openReviewIds:openReviewIds, openModes:openModes, assignSub:assignSub, modeOf:modeOf, summarize:summarize, normalizeForCompare:normalizeForCompare};
 })();
 if(typeof module!=='undefined') module.exports = Core;
@@ -443,7 +453,7 @@ function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(
 var Store={
   ok:true, state:null,
   defaults:function(){ return {v:1, sets:[], review:{}, current:null, results:[], logs:[], lastResultId:null, seeded:false,
-    settings:{setId:null, mode:1, scope:'all', order:'csv', method:'screen', finger:true, sound:false, hand:'right', autoJudge:true}}; },
+    settings:{setId:null, mode:1, scope:'all', order:'csv', method:'screen', finger:true, sound:false, hand:'right', autoJudge:true, strict:2}}; },
   load:function(){
     var s=null;
     try{ var raw=localStorage.getItem(KEY); if(raw) s=JSON.parse(raw); }catch(e){ this.ok=false; }
@@ -468,6 +478,8 @@ var Store={
   }
 };
 var st; // Store.state
+var STRICT_LABEL={1:'きびしい',2:'ふつう',3:'やさしい'};
+var STRICT_DESC={1:'候補1位だけ○',2:'候補2位まで○',3:'候補3位まで○'};
 var LOG_MAX=50, LOG_STROKES=10;   /* 答案の記録は直近50回、筆跡は直近10回分 */
 function stripStrokes(log){ Object.keys(log.answers).forEach(function(k){ delete log.answers[k].strokes; }); log.hasStrokes=false; }
 
@@ -493,9 +505,9 @@ var Recog={state:'idle', chars:null, p:null,
     return KanjiCanvas.fineClassification(ex, KanjiCanvas.coarseClassification(ex)).trim().split(/\s+/).filter(Boolean);
   }
 };
-function recognizeStrokes(strokes){
+function recognizeStrokes(strokes, geo){
   return Recog.load().then(function(){
-    var cells=Core.segmentCells(strokes); if(!cells.length) throw new Error('empty');
+    var cells=Core.segmentCells(strokes, geo && {w:1200, h:geo.h, cell:geo.cell}); if(!cells.length) throw new Error('empty');
     var out=[], i=0;
     return new Promise(function(res,rej){
       (function step(){
@@ -512,10 +524,11 @@ var recogRunning={};
 function runRecognition(cur, q, a){
   var key=cur.id+'|'+q.id; if(recogRunning[key]) return; recogRunning[key]=1;
   var timeout=new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('timeout')); },20000); });
-  Promise.race([recognizeStrokes(a.strokes), timeout]).then(function(res){
+  Promise.race([recognizeStrokes(a.strokes, geoOf(a)), timeout]).then(function(res){
     a.recognized=res.text; a.candidates=res.cands;
     if(Recog.unsupported(q.kanji).length){ a.recogState='unsupported'; a.auto=null; }
-    else { a.auto=Core.judgeRecognized(res.text, q.kanji); a.recogState='done'; a.pending={result:a.auto}; if(a.auto==='ok') chime('ok'); }
+    else { var jr=Core.judgeCandidates(res.cands, q.kanji, st.settings.strict); a.auto=jr.result; a.ranks=jr.ranks; a.strict=st.settings.strict;
+      a.recogState='done'; a.pending={result:a.auto}; if(a.auto==='ok') chime('ok'); }
   }).catch(function(){ a.recogState='error'; a.auto=null; })
   .then(function(){
     delete recogRunning[key]; Store.save(true);
@@ -573,12 +586,13 @@ function chime(kind){
 /* ===== 書き取り欄（Pointer Events） =====
    座標は 1200×900 の論理座標で保存し、回転・サイズ変更でも筆跡と表示を一致させる。
    点は [x, y, t(ms)]。消した線は配列から取り除くので、提出データに残らない。 */
-var LW=1200, LH=900;
+var LW=1200, LH=800, CELLPX=400;   /* 書き取り欄は3×2マス。v2初版の答案は 1200×900・4×3 */
+function geoOf(a){ return a && a.pad==='3x2' ? {h:800, cell:400} : (a && a.strokes && a.strokes.length ? {h:900, cell:300} : {h:800, cell:400}); }
 function Pad(canvas, opts){
   this.c=canvas; this.ctx=canvas.getContext('2d'); this.o=opts||{};
   this.strokes=(this.o.strokes||[]).map(function(s){return s.slice();});
   this.actions=[]; this.cur=null; this.pid=null; this.mode='pen'; this.base=Date.now();
-  this.scale=1; var self=this;
+  this.scale=1; this.lh=this.o.lh||LH; this.cell=this.o.cell||CELLPX; var self=this;
   if(!this.o.readOnly){
     canvas.addEventListener('pointerdown',function(e){self.down(e);});
     canvas.addEventListener('pointermove',function(e){self.move(e);});
@@ -589,14 +603,14 @@ function Pad(canvas, opts){
   }
 }
 Pad.prototype.fit=function(w,h){
-  var cw=Math.max(80,Math.min(w, h*LW/LH)), ch=cw*LH/LW, dpr=window.devicePixelRatio||1;
+  var cw=Math.max(80,Math.min(w, h*LW/this.lh)), ch=cw*this.lh/LW, dpr=window.devicePixelRatio||1;
   this.c.style.width=cw+'px'; this.c.style.height=ch+'px';
   this.c.width=Math.round(cw*dpr); this.c.height=Math.round(ch*dpr);
   this.scale=cw/LW*dpr; this.redraw();
 };
 Pad.prototype.pt=function(e){
   var r=this.c.getBoundingClientRect();
-  return [Math.round((e.clientX-r.left)/r.width*LW), Math.round((e.clientY-r.top)/r.height*LH), Date.now()-this.base];
+  return [Math.round((e.clientX-r.left)/r.width*LW), Math.round((e.clientY-r.top)/r.height*this.lh), Date.now()-this.base];
 };
 Pad.prototype.allowed=function(e){ return e.pointerType!=='touch' || this.o.finger!==false; };
 Pad.prototype.down=function(e){
@@ -641,12 +655,13 @@ Pad.prototype.redraw=function(){
   var x=this.ctx, s=this.scale; x.setTransform(1,0,0,1,0,0); x.clearRect(0,0,this.c.width,this.c.height);
   x.setTransform(s,0,0,s,0,0);
   x.strokeStyle='#BFE2F5'; x.lineWidth=4; x.setLineDash([]);
-  for(var gx=300;gx<LW;gx+=300){ x.beginPath(); x.moveTo(gx,0); x.lineTo(gx,LH); x.stroke(); }
-  for(var gy=300;gy<LH;gy+=300){ x.beginPath(); x.moveTo(0,gy); x.lineTo(LW,gy); x.stroke(); }
+  var C=this.cell, H=this.lh;
+  for(var gx=C;gx<LW;gx+=C){ x.beginPath(); x.moveTo(gx,0); x.lineTo(gx,H); x.stroke(); }
+  for(var gy=C;gy<H;gy+=C){ x.beginPath(); x.moveTo(0,gy); x.lineTo(LW,gy); x.stroke(); }
   x.strokeStyle='#E3F2FA'; x.lineWidth=2; x.setLineDash([10,12]);
-  for(var hx=150;hx<LW;hx+=300){ x.beginPath(); x.moveTo(hx,0); x.lineTo(hx,LH); x.stroke(); }
-  for(var hy=150;hy<LH;hy+=300){ x.beginPath(); x.moveTo(0,hy); x.lineTo(LW,hy); x.stroke(); }
-  x.setLineDash([]); x.strokeStyle='#1F2430'; x.fillStyle='#1F2430'; x.lineWidth=16; x.lineCap='round'; x.lineJoin='round';
+  for(var hx=C/2;hx<LW;hx+=C){ x.beginPath(); x.moveTo(hx,0); x.lineTo(hx,H); x.stroke(); }
+  for(var hy=C/2;hy<H;hy+=C){ x.beginPath(); x.moveTo(0,hy); x.lineTo(LW,hy); x.stroke(); }
+  x.setLineDash([]); x.strokeStyle='#1F2430'; x.fillStyle='#1F2430'; x.lineWidth=this.cell>=400?20:16; x.lineCap='round'; x.lineJoin='round';
   var all=this.cur ? this.strokes.concat([this.cur]) : this.strokes;
   all.forEach(function(p){
     if(p.length===1){ x.beginPath(); x.arc(p[0][0],p[0][1],8,0,Math.PI*2); x.fill(); return; }
@@ -795,6 +810,7 @@ function renderQuestion(app, head, cur, q){
     var strokes = pad ? pad.strokes.map(function(s){return s.slice();}) : [];
     cur.answers[q.id]={strokes:strokes, drawn:strokes.length>0, method:meth, mode:m, submittedAt:Date.now(),
       recognized:null, auto:null, pending:{}, final:null,
+      pad:'3x2',
       recogState: (st.settings.autoJudge && meth==='screen' && strokes.length && (m===1||m===4)) ?
         (Recog.chars && Recog.unsupported(q.kanji).length ? 'unsupported' : 'pending') : 'none'};
     cur.draft=null; cur.phase='answer'; Store.save(); render();
@@ -809,8 +825,9 @@ function renderAnswer(app, head, cur, q, set){
     h+='<section class="mine"><div class="label">あなたの こたえ</div>';
     if(a.method==='screen' && a.drawn) h+='<div class="padwrap" id="minewrap"><canvas class="pad" id="mine"></canvas></div>';
     if(rs==='pending') h+='<div class="recog">よみとり中…</div>';
-    else if(rs==='done') h+='<div class="recog '+a.auto+'"><span>よみとった字</span><span class="rt">'+esc(a.recognized)+'</span>'+
-      '<span class="vd">'+(a.auto==='ok'?'○ せいかい！':'△ ちがったよ')+'</span><small>よみとりが まちがっていたら、おうちの人が あとで なおせます</small></div>';
+    else if(rs==='done') h+= a.auto==='ok'
+      ? '<div class="recog ok"><span class="vd" style="font-size:26px">○ せいかい！</span></div>'
+      : '<div class="recog ng"><span>よみとった字</span><span class="rt">'+esc(a.recognized)+'</span><span class="vd">△ ちがったよ</span><small>よみとりが まちがっていたら、おうちの人が あとで なおせます</small></div>';
     else if(rs==='error') h+='<div class="recog err">よみとれなかったので、こたえを見て たしかめよう</div>';
     else if(rs==='unsupported') h+='<div class="recog err">この ことばは じどうで さいてんできないので、こたえを見て たしかめよう</div>';
     else if(a.method==='screen' && a.drawn) h+='<div class="note">じぶんの字と こたえを くらべて えらぼう</div>';
@@ -840,7 +857,7 @@ function renderAnswer(app, head, cur, q, set){
   }
   h+='</div><button class="btn primary xl" id="next" '+(Core.isComplete(m,a.pending)?'':'disabled')+'>'+(last?'けっかを見る':'つぎへ')+'</button></footer>';
   app.innerHTML=h;
-  if($('#mine')){ pad=mountPad($('#mine'), $('#minewrap'), {readOnly:true, strokes:a.strokes}); }
+  if($('#mine')){ var g=geoOf(a); pad=mountPad($('#mine'), $('#minewrap'), {readOnly:true, strokes:a.strokes, lh:g.h, cell:g.cell}); }
   if(rs==='pending') runRecognition(cur, q, a);
   $$('.jbtn').forEach(function(b){ b.onclick=function(){
     a.pending[b.dataset.f]=b.dataset.v; Store.save(true);
@@ -866,7 +883,7 @@ function finishSession(){
   var ans={};
   Object.keys(cur.answers).forEach(function(k){
     var a=cur.answers[k];
-    ans[k]={mode:a.mode||Core.modeOf(cur,k), method:a.method, drawn:a.drawn, recognized:a.recognized||null, candidates:a.candidates||null,
+    ans[k]={pad:a.pad||null, ranks:a.ranks||null, strict:a.strict||null, mode:a.mode||Core.modeOf(cur,k), method:a.method, drawn:a.drawn, recognized:a.recognized||null, candidates:a.candidates||null,
       auto:a.auto||null, recogState:a.recogState||'none', final:a.final, judgedBy:a.judgedBy, decidedAt:a.decidedAt,
       strokes: a.drawn ? a.strokes.map(function(s){ return s.map(function(p){ return [p[0],p[1]]; }); }) : undefined};
   });
@@ -933,6 +950,8 @@ function renderParent(app){
   h+='</section><section class="panel"><h2>設定</h2>'+
     '<label class="check"><input type="checkbox" id="finger" '+(s.finger?'checked':'')+'>指でも書けるようにする（タッチペンが指と同じ扱いになる機種ではオンのまま）</label>'+
     '<label class="check"><input type="checkbox" id="autoJudge" '+(s.autoJudge?'checked':'')+'>①④の手書きを自動で採点する（答案はあとで「答案のふりかえり」から見直して直せます）</label>'+
+    '<div class="row"><span class="lab">判定の厳しさ</span>'+[1,2,3].map(function(k){ return '<button class="opt" data-strict="'+k+'" aria-pressed="'+(s.strict===k)+'">'+STRICT_LABEL[k]+'<span class="sub">'+STRICT_DESC[k]+'</span></button>'; }).join('')+'</div>'+
+    '<p class="credit">読み取りでは、1マスごとに似ている字を順に候補として出します。正解の字が何位までに入っていれば○にするかを選びます。字数がちがうときは、どの段階でも△です。変更はこれから答える問題に使われます。</p>'+
     '<p class="credit">手書き認識：'+({ready:'準備できています（'+(Recog.chars?Object.keys(Recog.chars).length:0)+'字）',loading:'読み込み中…',failed:'読み込めませんでした。通信できる状態で一度開いてください',idle:'未読み込み'})[Recog.state]+'</p>'+
     '<label class="check"><input type="checkbox" id="sound" '+(s.sound?'checked':'')+'>効果音を鳴らす</label>'+
     '<div class="row"><span class="lab">きき手</span><button class="opt" data-hand="right" aria-pressed="'+(s.hand!=='left')+'">右（問題を左に表示）</button><button class="opt" data-hand="left" aria-pressed="'+(s.hand==='left')+'">左（問題を右に表示）</button></div>'+
@@ -947,7 +966,7 @@ function renderParent(app){
     h+='</tbody></table></div>';
   }
   h+='</section><section class="panel"><h2>保存について</h2><p>問題集・途中の学習・記録・復習の状態は、この端末のブラウザ内に保存されます。Safariの「履歴とWebサイトデータを消去」やアプリの削除で消えます。答案の判定は直近50回分、手書きの筆跡は直近10回分を保存します。</p></section>'+
-    '<section class="panel"><h2>手書き認識について</h2><p class="credit">手書き文字の認識に <a href="https://github.com/asdfjkl/kanjicanvas" target="_blank" rel="noopener">KanjiCanvas</a>（Copyright (c) 2019 Dominik Klein, Kanji Canvas／MIT License）を使用しています。認識は端末内で行い、筆跡を外部に送信しません。漢字2,213字とひらがなに対応し、1マスに書いた字を1文字として読み取ります。</p></section></div>';
+    '<section class="panel"><h2>手書き認識について</h2><p class="credit">手書き文字の認識に <a href="https://github.com/asdfjkl/kanjicanvas" target="_blank" rel="noopener">KanjiCanvas</a>（Copyright (c) 2019 Dominik Klein, Kanji Canvas／MIT License）を使用しています。認識は端末内で行い、筆跡を外部に送信しません。漢字2,213字とひらがなに対応し、3×2の6マスに書いた字を、1マス1文字として読み取ります。</p></section></div>';
   app.innerHTML=h;
   $('#back').onclick=function(){ go('home'); };
   $('#enc').value = imp ? imp.enc : 'auto';
@@ -972,6 +991,7 @@ function renderParent(app){
     });
   }; });
   $('#finger').onchange=function(){ s.finger=this.checked; Store.save(); };
+  $$('[data-strict]').forEach(function(b){ b.onclick=function(){ s.strict=+b.dataset.strict; Store.save(); render(); }; });
   $('#autoJudge').onchange=function(){ s.autoJudge=this.checked; Store.save(); if(this.checked) Recog.load().then(render,function(){ render(); }); };
   $$('[data-review]').forEach(function(b){ b.onclick=function(){ reviewId=b.dataset.review; go('review'); }; });
   $('#sound').onchange=function(){ s.sound=this.checked; Store.save(); if(this.checked) chime('ok'); };
@@ -1021,6 +1041,8 @@ function renderReview(app){
     else if(a.drawn) h+='<div class="empty">筆跡は保存期間外</div>';
     else h+='<div class="empty">書いていない</div>';
     if(a.recognized) h+='<div class="rrec">読み取り：<b>'+esc(a.recognized)+'</b></div>';
+    if(a.recognized && a.strict) h+='<div class="credit">'+STRICT_LABEL[a.strict]+'で判定'+
+      (a.ranks ? '・正解の字の順位：'+a.ranks.map(function(x){ return x<0?'候補外':(x+1)+'位'; }).join('／') : '・字数ちがい')+'</div>';
     else if(a.recogState==='error') h+='<div class="rrec">読み取り：できなかった</div>';
     else if(a.recogState==='unsupported') h+='<div class="rrec">読み取り：対応外の字</div>';
     h+='</div><div class="rjudge">';
@@ -1036,7 +1058,7 @@ function renderReview(app){
   app.innerHTML=h; app.scrollTop=keep;
   $('#back').onclick=function(){ go('parent'); };
   $$('canvas[data-thumb]').forEach(function(c){
-    var tp=new Pad(c,{readOnly:true, strokes:log.answers[c.dataset.thumb].strokes}); tp.fit(220,165);
+    var la=log.answers[c.dataset.thumb], g=geoOf(la); var tp=new Pad(c,{readOnly:true, strokes:la.strokes, lh:g.h, cell:g.cell}); tp.fit(240,180);
   });
   $$('.rjudge .jbtn').forEach(function(b){ b.onclick=function(){ correctAnswer(log, b.dataset.q, b.dataset.f, b.dataset.v); }; });
 }
@@ -1085,6 +1107,11 @@ function previewHTML(){
       bad.slice(0,15).forEach(function(x){ h+='<li>'+x+'</li>'; }); if(bad.length>15) h+='<li>ほか '+(bad.length-15)+'行</li>';
       h+='</ul></div>';
     }
+  }
+  var longs=a.valid.filter(function(q){ return Array.from(q.kanji).length>6; });
+  if(longs.length){
+    h+='<div class="msg warn"><b>漢字の列が7文字以上の行があります</b>。書き取り欄は6マスなので、①④では書ききれません。<ul>';
+    longs.slice(0,10).forEach(function(q){ h+='<li>'+q.line+'行目「'+esc(q.kanji)+'」</li>'; }); h+='</ul></div>';
   }
   if(a.homophones.length){
     h+='<div class="msg warn"><b>同じ読みで漢字がちがう行があります</b>。①（読み→漢字）では答えが1つに決まらないため、答え画面で別解を正解にしてください。<ul>';
