@@ -1,5 +1,5 @@
 // かんじれんしゅう2: アプリ本体・手書き認識データ・フォントを端末にキャッシュし、オフラインでも起動できるようにする
-const CACHE = 'kanji-renshu2-v4';
+const CACHE = 'kanji-renshu2-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png',
   './recognizer/kanji-canvas.js', './recognizer/ref-patterns.js', './recognizer/kana-patterns.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
