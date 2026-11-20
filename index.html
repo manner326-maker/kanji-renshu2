@@ -160,6 +160,24 @@ canvas.pad.thumb{border-width:2px}
 .jbtn.sm[aria-pressed="true"]::after{content:""}
 @media (max-width:820px){ .ritem{grid-template-columns:auto 1fr} .rans,.rjudge{grid-column:2} }
 .credit{font-size:14px;color:var(--muted)}
+.amain3{display:grid;grid-template-columns:minmax(300px,38%) 1fr;gap:14px;padding:8px 20px;min-height:0}
+.acol{display:flex;flex-direction:column;gap:12px;min-height:0}
+.acol .truth{flex:0 1 auto;padding:14px 16px;gap:8px}
+.acol .truth .big.kanji{--max:110px} .acol .truth .big.yomi{--max:60px}
+.acol .facts{gap:6px} .acol .facts div{padding:5px 12px} .acol .facts dd{font-size:19px}
+.acol .mine{flex:1 1 0;min-height:150px;padding:12px 16px;gap:8px}
+.acol .mine .padwrap{min-height:80px}
+.acol .recog{padding:8px 12px} .acol .recog .rt{font-size:26px}
+.practice{background:var(--surface);border:3px solid var(--sky);border-radius:var(--r-l);padding:12px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
+@media (max-aspect-ratio:1/1), (max-width:760px){
+  .amain3{grid-template-columns:1fr;grid-template-rows:auto minmax(320px,1fr);overflow:auto}
+  .acol{flex-direction:row} .acol .truth,.acol .mine{flex:1 1 0;min-width:0;min-height:0}
+  .acol .truth .big.kanji{--max:96px}
+}
+
+.tabs{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tabs .opt{min-height:44px;font-size:16px;padding:4px 14px}
+.truth .tabs{justify-content:space-between}
 .testpad{width:min(100%,560px);height:380px;display:grid;place-items:center}
 [data-lp]{touch-action:none;-webkit-touch-callout:none;cursor:pointer;transition:transform .6s}
 [data-lp].pressing{transform:scale(.94)}
@@ -671,6 +689,12 @@ Pad.prototype.redraw=function(){
   x.strokeStyle='#E3F2FA'; x.lineWidth=2; x.setLineDash([10,12]);
   for(var hx=C/2;hx<LW;hx+=C){ x.beginPath(); x.moveTo(hx,0); x.lineTo(hx,H); x.stroke(); }
   for(var hy=C/2;hy<H;hy+=C){ x.beginPath(); x.moveTo(0,hy); x.lineTo(LW,hy); x.stroke(); }
+  if(this.o.guide && this.o.showGuide){
+    var cols=Math.round(LW/C), cells=cols*Math.round(H/C);
+    x.fillStyle='#D9DEE6'; x.textAlign='center'; x.textBaseline='middle';
+    x.font='600 '+Math.round(C*0.74)+'px "Klee One","YuKyokasho","Hiragino Mincho ProN",serif';
+    this.o.guide.slice(0,cells).forEach(function(ch,i){ x.fillText(ch, (i%cols)*C+C/2, Math.floor(i/cols)*C+C/2+C*0.03); });
+  }
   x.setLineDash([]); x.strokeStyle=INK_COLOR; x.fillStyle=INK_COLOR; x.lineCap='round'; x.lineJoin='round';
   var ink=this.o.ink||inkSettings(), base=(LINE_W[ink.width]||15)*(this.cell/400);
   var all=this.cur ? this.strokes.concat([this.cur]) : this.strokes;
@@ -741,12 +765,13 @@ function mountPad(canvas, wrap, opts){
 }
 
 /* ===== 画面遷移 ===== */
-var view='home', pad=null, busy=false, imp=null, reviewId=null, testPad=null, testStrokes=[];
+var view='home', pad=null, minePad=null, busy=false, imp=null, reviewId=null, testPad=null, testStrokes=[], practice=null;
 function renderKeep(){ var app=$('#app'), y=app.scrollTop; render(); app.scrollTop=y; }
 function go(v){ view=v; render(); }
 function render(){
   if(pad && pad.ro){ pad.ro.disconnect(); } pad=null;
   if(testPad && testPad.ro){ testPad.ro.disconnect(); } testPad=null;
+  if(minePad && minePad.ro){ minePad.ro.disconnect(); } minePad=null;
   var app=$('#app'); app.className = (view==='parent'||view==='review') ? 'scroll' : '';
   if(view==='home') renderHome(app);
   else if(view==='quiz') renderQuiz(app);
@@ -886,27 +911,35 @@ function renderQuestion(app, head, cur, q){
 function renderAnswer(app, head, cur, q, set){
   var m=Core.modeOf(cur,q.id), a=cur.answers[q.id]||{pending:{}}, write=MODES[m].write;
   var rs=a.recogState||'none', autoMode = rs==='pending' || rs==='done';
-  var h=head+'<main class="amain'+(write?'':' single')+'">';
+  if(!practice || practice.qid!==cur.id+'|'+q.id) practice={qid:cur.id+'|'+q.id, strokes:[], guide:true, tool:'pen'};
+  /* 左：こたえ と あなたのこたえ／右：いつでも書ける れんしゅう欄（採点には入らない） */
+  var big=function(c,t){ return '<div class="big '+c+' fitlen" style="--len:'+lenOf(t)+'">'+esc(t)+'</div>'; };
+  var main = (m===1||m===4) ? big('kanji',q.kanji)
+    : m===2 ? big('yomi',q.yomi)
+    : big('yomi',q.yomi)+'<div class="big imi">'+esc(q.imi)+'</div>';
+  var h=head+'<main class="amain3"><div class="acol">';
+  h+='<section class="truth"><div class="label">こたえ</div>'+main+
+    '<dl class="facts"><div><dt>かんじ</dt><dd>'+esc(q.kanji)+'</dd></div><div><dt>よみ</dt><dd>'+esc(q.yomi)+'</dd></div><div><dt>いみ</dt><dd>'+esc(q.imi)+'</dd></div></dl></section>';
   if(write){
     h+='<section class="mine"><div class="label">あなたの こたえ</div>';
     if(a.method==='screen' && a.drawn) h+='<div class="padwrap" id="minewrap"><canvas class="pad" id="mine"></canvas></div>';
     if(rs==='pending') h+='<div class="recog">よみとり中…</div>';
     else if(rs==='done') h+= a.pending.result==='ok'
-      ? '<div class="recog ok noselect" data-lp="1"><span class="vd" style="font-size:26px">○ せいかい！</span></div>'
+      ? '<div class="recog ok noselect" data-lp="1"><span class="vd" style="font-size:24px">○ せいかい！</span></div>'
       : '<div class="recog ng noselect" data-lp="1"><span>よみとった字</span><span class="rt">'+esc(a.recognized)+'</span><span class="vd">△ ちがったよ</span><small>よみとりが まちがっていたら、おうちの人が あとで なおせます</small></div>';
     else if(rs==='error') h+='<div class="recog err">よみとれなかったので、こたえを見て たしかめよう</div>';
     else if(rs==='unsupported') h+='<div class="recog err">この ことばは じどうで さいてんできないので、こたえを見て たしかめよう</div>';
     else if(a.method==='screen' && a.drawn) h+='<div class="note">じぶんの字と こたえを くらべて えらぼう</div>';
-    else if(a.method==='paper') h+='<div class="think">かみに かいた こたえと くらべよう</div>';
-    else h+='<div class="think">かいていないので、<br>こたえを見て たしかめよう</div>';
+    else if(a.method==='paper') h+='<div class="note">かみに かいた こたえと くらべよう</div>';
+    else h+='<div class="note">かいていないので、こたえを見て たしかめよう</div>';
     h+='</section>';
   }
-  var big=function(c,t){ return '<div class="big '+c+' fitlen" style="--len:'+lenOf(t)+'">'+esc(t)+'</div>'; };
-  var main = (m===1||m===4) ? big('kanji',q.kanji)
-    : m===2 ? big('yomi',q.yomi)
-    : big('yomi',q.yomi)+'<div class="big imi">'+esc(q.imi)+'</div>';
-  h+='<section class="truth"><div class="label">こたえ</div>'+main+
-    '<dl class="facts"><div><dt>かんじ</dt><dd>'+esc(q.kanji)+'</dd></div><div><dt>よみ</dt><dd>'+esc(q.yomi)+'</dd></div><div><dt>いみ</dt><dd>'+esc(q.imi)+'</dd></div></dl></section></main>';
+  h+='</div><section class="practice"><div class="phead noselect"><span class="label">れんしゅう（さいてんに はいらないよ）</span></div>'+
+    '<div class="tools noselect"><button class="opt" id="pPen" aria-pressed="'+(practice.tool==='pen')+'">えんぴつ</button>'+
+    '<button class="opt" id="pErase" aria-pressed="'+(practice.tool==='erase')+'">けしゴム</button>'+
+    '<button class="opt" id="pUndo">1つ もどす</button><button class="opt" id="pClear">ぜんぶ けす</button>'+
+    '<button class="opt" id="pGuide" aria-pressed="'+practice.guide+'">おてほん</button></div>'+
+    '<div class="padwrap" id="practwrap"><canvas class="pad" id="pract" aria-label="れんしゅうらん"></canvas></div></section></main>';
   var last = cur.pos===cur.qids.length-1;
   h+='<footer class="afoot noselect"><div class="judge">';
   if(autoMode){
@@ -923,7 +956,20 @@ function renderAnswer(app, head, cur, q, set){
   }
   h+='</div><button class="btn primary xl" id="next" '+(Core.isComplete(m,a.pending)?'':'disabled')+'>'+(last?'けっかを見る':'つぎへ')+'</button></footer>';
   app.innerHTML=h;
-  if($('#mine')){ var g=geoOf(a); pad=mountPad($('#mine'), $('#minewrap'), {readOnly:true, strokes:a.strokes, lh:g.h, cell:g.cell}); }
+  if($('#mine')){ var g=geoOf(a); minePad=mountPad($('#mine'), $('#minewrap'), {readOnly:true, strokes:a.strokes, lh:g.h, cell:g.cell}); }
+  if($('#pract')){
+    pad=mountPad($('#pract'), $('#practwrap'), {strokes:practice.strokes, finger:st.settings.finger, guide:Array.from(q.kanji), showGuide:practice.guide,
+      onChange:function(x){ practice.strokes=x.map(function(z){return z.slice();}); }});
+    pad.mode=practice.tool; $('#pract').classList.toggle('erasing', practice.tool==='erase');
+    if(document.fonts && document.fonts.load){ var pp=pad; document.fonts.load('600 100px "Klee One"', q.kanji).then(function(){ pp.redraw(); }, function(){}); }
+    var setT=function(t){ practice.tool=t; pad.mode=t; $('#pPen').setAttribute('aria-pressed',t==='pen'); $('#pErase').setAttribute('aria-pressed',t==='erase'); $('#pract').classList.toggle('erasing',t==='erase'); };
+    $('#pPen').onclick=function(){ setT('pen'); };
+    $('#pErase').onclick=function(){ setT('erase'); };
+    $('#pUndo').onclick=function(){ pad.undo(); };
+    $('#pClear').onclick=function(){ pad.clear(); };
+    $('#pGuide').onclick=function(){ practice.guide=!practice.guide; pad.o.showGuide=practice.guide; this.setAttribute('aria-pressed',practice.guide); pad.redraw(); };
+  }
+
   if(rs==='pending') runRecognition(cur, q, a);
   /* 自動採点の結果を長押し（0.6秒）で ○⇔△ に切り替える（その場での修正） */
   if(rs==='done') $$('[data-lp]').forEach(function(el){
