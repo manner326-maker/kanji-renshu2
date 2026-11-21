@@ -160,6 +160,34 @@ canvas.pad.thumb{border-width:2px}
 .jbtn.sm[aria-pressed="true"]::after{content:""}
 @media (max-width:820px){ .ritem{grid-template-columns:auto 1fr} .rans,.rjudge{grid-column:2} }
 .credit{font-size:14px;color:var(--muted)}
+.kbtn{font:inherit;background:none;border:0;padding:0 .02em;color:inherit;cursor:pointer;border-bottom:4px dotted var(--sky);line-height:1.15}
+.kbtn:active{background:var(--sky-soft)}
+.modal .box.so-box{max-width:880px;width:96vw;max-height:92vh;overflow:auto;font-size:16px;gap:14px}
+.so-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.so-head b{font-size:22px}
+.so-chars{display:flex;gap:8px;flex:1;flex-wrap:wrap}
+.so-c{font-family:var(--font-kanji);font-size:28px;min-height:52px;padding:4px 14px}.so-c[aria-pressed="true"]::before{display:none}
+.so-main{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:18px;align-items:center}
+.so-anim{background:var(--bg);border:3px solid var(--line);border-radius:var(--r-m);aspect-ratio:1}
+.so-ctrl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.so-side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.so-info{display:grid;gap:6px;margin:0}
+.so-info div{display:grid;grid-template-columns:5.5em 1fr;gap:10px;align-items:baseline;background:var(--bg);border-radius:var(--r-s);padding:6px 12px}
+.so-info dt{font-weight:700;color:var(--muted);font-size:15px}
+.so-info dd{margin:0;font-size:19px;font-weight:700;line-height:1.5}
+.so-info rt{font-size:10px}
+.so-rad{font-family:var(--font-kanji);font-size:28px;font-weight:600;color:var(--pink)}
+.so-count{font-size:24px;font-weight:900;min-width:7em;font-variant-numeric:tabular-nums}
+.so-frames{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
+.so-f{margin:0;background:var(--bg);border:2px solid var(--line);border-radius:var(--r-s);padding:4px;text-align:center;cursor:pointer}
+.so-f.on{border-color:var(--pink)}
+.so-f figcaption{font-size:13px;font-weight:700;color:var(--muted)}
+svg.kvg{width:100%;height:auto;display:block}
+.kvg .kgrid path{stroke:#D7E9F4;stroke-width:.6;stroke-dasharray:2 2;fill:none}
+.kvg .kbase path{stroke:#E4E7EC;stroke-width:3.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.kvg .kink path{stroke:#1C2030;stroke-width:3.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.kvg .kink path.kred{stroke:#E5484D}
+.kvg .knum text{font-size:8px;fill:#E5484D;font-family:var(--font-ui);font-weight:700}
+@media (max-width:640px){ .so-main{grid-template-columns:1fr} }
 .amain3{display:grid;grid-template-columns:minmax(300px,38%) 1fr;gap:14px;padding:8px 20px;min-height:0}
 .acol{display:flex;flex-direction:column;gap:12px;min-height:0}
 .acol .truth{flex:0 1 auto;padding:14px 16px;gap:8px}
@@ -583,6 +611,92 @@ function toast(msg){
   var t=$('.toast'); if(!t){ t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); document.body.appendChild(t); }
   t.textContent=msg; t.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(function(){ t.hidden=true; },2600);
 }
+/* ===== 書き順（KanjiVG）：答え画面の漢字を押すと表示 ===== */
+var Stroke={p:null,
+  load:function(){
+    if(this.p) return this.p; var self=this;
+    var one=function(src){ return new Promise(function(res,rej){ var el=document.createElement('script'); el.src=src; el.onload=function(){ res(); }; el.onerror=function(){ rej(new Error(src)); }; document.head.appendChild(el); }); };
+    this.p=Promise.all([one('strokeorder/kanjivg.js'), one('strokeorder/kanjiinfo.js').catch(function(){})]).catch(function(e){ self.p=null; throw e; });
+    return this.p;
+  },
+  has:function(c){ return !!(window.KVG && window.KVG[c]); }
+};
+var SVGNS='http://www.w3.org/2000/svg';
+function kvgSvg(ch, upto, opts){
+  /* upto：何画目まで描くか（-1=全部うすく）。opts.red：その画を赤、opts.nums：番号表示 */
+  var d=window.KVG[ch], paths=d[0], nums=d[1]; opts=opts||{};
+  var s='<svg viewBox="0 0 109 109" class="kvg" aria-hidden="true"><g class="kgrid"><path d="M54.5 0V109M0 54.5H109"/></g><g class="kbase">';
+  paths.forEach(function(p){ s+='<path d="'+p+'"/>'; });
+  s+='</g><g class="kink">';
+  paths.forEach(function(p,i){ if(i<upto) s+='<path d="'+p+'"'+(opts.red && i===upto-1?' class="kred"':'')+'/>'; });
+  s+='</g>';
+  if(opts.nums) { s+='<g class="knum">'; nums.forEach(function(n,i){ if(i<upto) s+='<text x="'+n[0]+'" y="'+n[1]+'">'+(i+1)+'</text>'; }); s+='</g>'; }
+  return s+'</svg>';
+}
+var strokeAnim=null;
+function kanjiInfoHTML(c, n){
+  var r=function(k,y){ return '<ruby>'+k+'<rt>'+y+'</rt></ruby>'; };
+  var info=window.KINFO && window.KINFO[c], h='<dl class="so-info"><div><dt>'+r('画数','かくすう')+'</dt><dd>'+(info?info[0]:n)+'画</dd></div>';
+  if(info){
+    h+='<div><dt>'+r('部首','ぶしゅ')+'</dt><dd><span class="so-rad">'+esc(info[1])+'</span>'+(info[2]?'（'+esc(info[2])+'）':'')+'</dd></div>'+
+       '<div><dt>'+r('音','おん')+'読み</dt><dd>'+(info[3]?esc(info[3]):'—')+'</dd></div>'+
+       '<div><dt>'+r('訓','くん')+'読み</dt><dd>'+(info[4]?esc(info[4]):'—')+'</dd></div>';
+  }
+  return h+'</dl>';
+}
+function openStrokeOrder(word, startChar){
+  var chars=Array.from(word).filter(function(c){ return c.trim(); });
+  var m=document.createElement('div'); m.className='modal so-modal';
+  m.innerHTML='<div class="box so-box" role="dialog" aria-modal="true" aria-label="かきじゅん"><div class="so-head"><b>かきじゅん</b><div class="so-chars" id="soChars"></div><button class="btn primary small" id="soClose">とじる</button></div><div id="soBody" class="so-body"><p class="empty">よみこみ中…</p></div></div>';
+  document.body.appendChild(m);
+  var close=function(){ if(strokeAnim){ strokeAnim.stop(); strokeAnim=null; } m.remove(); };
+  $('#soClose',m).onclick=close;
+  m.addEventListener('click',function(e){ if(e.target===m) close(); });
+  Stroke.load().then(function(){
+    var list=chars.filter(function(c){ return Stroke.has(c); });
+    if(!list.length){ $('#soBody',m).innerHTML='<p class="empty">この ことばの かきじゅんの データが ありません</p>'; return; }
+    $('#soChars',m).innerHTML=list.map(function(c){ return '<button class="opt so-c" data-c="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
+    var show=function(c){
+      $$('.so-c',m).forEach(function(b){ b.setAttribute('aria-pressed', b.dataset.c===c); });
+      var n=window.KVG[c][0].length, h='<div class="so-main"><div class="so-anim" id="soAnim">'+kvgSvg(c,0,{})+'</div>'+
+        '<div class="so-side"><div class="so-ctrl"><span class="so-count" id="soCount">'+n+'画</span>'+
+        '<button class="btn small" id="soPrev" aria-label="1画もどる">◀</button><button class="btn primary small" id="soPlay">▶ うごかす</button><button class="btn small" id="soNext" aria-label="1画すすむ">▶▶</button>'+
+        '<label class="check so-num"><input type="checkbox" id="soNums">ばんごう</label></div>'+kanjiInfoHTML(c,n)+'</div></div><div class="so-frames">';
+      for(var i=1;i<=n;i++) h+='<figure class="so-f" data-i="'+i+'">'+kvgSvg(c,i,{red:true})+'<figcaption>'+i+'画目</figcaption></figure>';
+      $('#soBody',m).innerHTML=h+'</div>';
+      var step=n, nums=false;
+      var draw=function(k){ step=k; $('#soAnim',m).innerHTML=kvgSvg(c,k,{red:k<n,nums:nums}); $('#soCount',m).textContent=(k<n?k+'画目／':'')+n+'画';
+        $$('.so-f',m).forEach(function(f){ f.classList.toggle('on', +f.dataset.i===k && k<n); }); };
+      var play=function(){
+        if(strokeAnim) strokeAnim.stop();
+        var reduce=window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var stopped=false, k=0, timer=null, raf=null;
+        strokeAnim={stop:function(){ stopped=true; clearTimeout(timer); if(raf) cancelAnimationFrame(raf); }};
+        var next=function(){
+          if(stopped) return; k++;
+          if(k>n){ draw(n); strokeAnim=null; return; }
+          draw(k); if(reduce){ timer=setTimeout(next,450); return; }
+          var p=$('#soAnim .kink path:last-child',m); if(!p){ timer=setTimeout(next,300); return; }
+          var L=p.getTotalLength(), t0=null, dur=Math.max(200, L*7);
+          p.style.strokeDasharray=L; p.style.strokeDashoffset=L;
+          var tick=function(ts){ if(stopped) return; if(t0===null) t0=ts; var r=Math.min(1,(ts-t0)/dur); p.style.strokeDashoffset=L*(1-r);
+            if(r<1) raf=requestAnimationFrame(tick); else timer=setTimeout(next,120); };
+          raf=requestAnimationFrame(tick);
+        };
+        next();
+      };
+      $('#soPlay',m).onclick=play;
+      $('#soPrev',m).onclick=function(){ if(strokeAnim){ strokeAnim.stop(); strokeAnim=null; } draw(Math.max(1, step>=n?n-1:step-1)); };
+      $('#soNext',m).onclick=function(){ if(strokeAnim){ strokeAnim.stop(); strokeAnim=null; } draw(Math.min(n, step+1)); };
+      $('#soNums',m).onchange=function(){ nums=this.checked; draw(step); };
+      $$('.so-f',m).forEach(function(f){ f.onclick=function(){ if(strokeAnim){ strokeAnim.stop(); strokeAnim=null; } draw(+f.dataset.i); }; });
+      play();
+    };
+    $$('.so-c',m).forEach(function(b){ b.onclick=function(){ show(b.dataset.c); }; });
+    show(list.indexOf(startChar)>=0 ? startChar : list[0]);
+  }).catch(function(){ $('#soBody',m).innerHTML='<p class="empty">かきじゅんの データを よみこめませんでした</p>'; });
+}
+
 function confirmDialog(msg, okLabel, cancelLabel){
   return new Promise(function(res){
     var m=document.createElement('div'); m.className='modal';
@@ -914,11 +1028,12 @@ function renderAnswer(app, head, cur, q, set){
   if(!practice || practice.qid!==cur.id+'|'+q.id) practice={qid:cur.id+'|'+q.id, strokes:[], guide:true, tool:'pen'};
   /* 左：こたえ と あなたのこたえ／右：いつでも書ける れんしゅう欄（採点には入らない） */
   var big=function(c,t){ return '<div class="big '+c+' fitlen" style="--len:'+lenOf(t)+'">'+esc(t)+'</div>'; };
-  var main = (m===1||m===4) ? big('kanji',q.kanji)
+  var kbtns=function(t){ return '<div class="big kanji fitlen" style="--len:'+lenOf(t)+'">'+Array.from(t).map(function(c){ return '<button class="kbtn" data-so="'+esc(c)+'" aria-label="'+esc(c)+'の かきじゅん">'+esc(c)+'</button>'; }).join('')+'</div>'; };
+  var main = (m===1||m===4) ? kbtns(q.kanji)
     : m===2 ? big('yomi',q.yomi)
     : big('yomi',q.yomi)+'<div class="big imi">'+esc(q.imi)+'</div>';
   var h=head+'<main class="amain3"><div class="acol">';
-  h+='<section class="truth"><div class="label">こたえ</div>'+main+
+  h+='<section class="truth"><div class="tabs noselect"><span class="label">こたえ</span><button class="btn small" id="soOpen">かきじゅん</button></div>'+main+
     '<dl class="facts"><div><dt>かんじ</dt><dd>'+esc(q.kanji)+'</dd></div><div><dt>よみ</dt><dd>'+esc(q.yomi)+'</dd></div><div><dt>いみ</dt><dd>'+esc(q.imi)+'</dd></div></dl></section>';
   if(write){
     h+='<section class="mine"><div class="label">あなたの こたえ</div>';
@@ -957,6 +1072,8 @@ function renderAnswer(app, head, cur, q, set){
   h+='</div><button class="btn primary xl" id="next" '+(Core.isComplete(m,a.pending)?'':'disabled')+'>'+(last?'けっかを見る':'つぎへ')+'</button></footer>';
   app.innerHTML=h;
   if($('#mine')){ var g=geoOf(a); minePad=mountPad($('#mine'), $('#minewrap'), {readOnly:true, strokes:a.strokes, lh:g.h, cell:g.cell}); }
+  $$('[data-so]').forEach(function(b){ b.onclick=function(){ openStrokeOrder(q.kanji, b.dataset.so); }; });
+  if($('#soOpen')) $('#soOpen').onclick=function(){ openStrokeOrder(q.kanji); };
   if($('#pract')){
     pad=mountPad($('#pract'), $('#practwrap'), {strokes:practice.strokes, finger:st.settings.finger, guide:Array.from(q.kanji), showGuide:practice.guide,
       onChange:function(x){ practice.strokes=x.map(function(z){return z.slice();}); }});
@@ -1104,7 +1221,8 @@ function renderParent(app){
     h+='</tbody></table></div>';
   }
   h+='</section><section class="panel"><h2>保存について</h2><p>問題集・途中の学習・記録・復習の状態は、この端末のブラウザ内に保存されます。Safariの「履歴とWebサイトデータを消去」やアプリの削除で消えます。答案の判定は直近50回分、手書きの筆跡は直近10回分を保存します。</p></section>'+
-    '<section class="panel"><h2>手書き認識について</h2><p class="credit">手書き文字の認識に <a href="https://github.com/asdfjkl/kanjicanvas" target="_blank" rel="noopener">KanjiCanvas</a>（Copyright (c) 2019 Dominik Klein, Kanji Canvas／MIT License）を使用しています。認識は端末内で行い、筆跡を外部に送信しません。漢字2,213字とひらがなに対応し、3×2の6マスに書いた字を、1マス1文字として読み取ります。</p></section></div>';
+    '<section class="panel"><h2>手書き認識について</h2><p class="credit">手書き文字の認識に <a href="https://github.com/asdfjkl/kanjicanvas" target="_blank" rel="noopener">KanjiCanvas</a>（Copyright (c) 2019 Dominik Klein, Kanji Canvas／MIT License）を使用しています。認識は端末内で行い、筆跡を外部に送信しません。漢字2,213字とひらがなに対応し、3×2の6マスに書いた字を、1マス1文字として読み取ります。</p>'+
+    '<p class="credit">書き順の表示に <a href="https://kanjivg.tagaini.net" target="_blank" rel="noopener">KanjiVG</a>（Copyright (C) 2009-2026 Ulrich Apel／CC BY-SA 3.0）のデータを使用しています（常用漢字とひらがなを抜き出して利用）。画数・部首・読みは KANJIDIC（<a href="https://www.edrdg.org/" target="_blank" rel="noopener">EDRDG</a>）と <a href="https://github.com/mvf/kanjium" target="_blank" rel="noopener">kanjium</a>（CC BY-SA 4.0）によります。The pitch accent notation, verb particle data, phonetics, homonyms and other additions or modifications to EDICT, KANJIDIC or KRADFILE were provided by Uros O. through his free database.</p></section></div>';
   app.innerHTML=h;
   $('#back').onclick=function(){ go('home'); };
   $('#enc').value = imp ? imp.enc : 'auto';
